@@ -1,9 +1,5 @@
 #include "stream_reassembler.hh"
 
-#include <vector>
-#include <iterator>
-#include <map>
-#include <iostream>
 // Dummy implementation of a stream reassembler.
 
 // For Lab 1, please replace with a real implementation that passes the
@@ -16,113 +12,123 @@ void DUMMY_CODE(Targs &&... /* unused */) {}
 
 using namespace std;
 
-StreamReassembler::StreamReassembler(const size_t capacity) : _assemble_idx(0),\
- _output(capacity), _capacity(capacity), _eof_idx(-1), _segments({}) {}
+StreamReassembler::StreamReassembler(const size_t capacity) : 
+    _output(capacity), 
+    _capacity(capacity),
+    _data_map()
+{
+    ;
+}
 
 //! \details This function accepts a substring (aka a segment) of bytes,
 //! possibly out-of-order, from the logical stream, and assembles any newly
 //! contiguous substrings and writes them into the output stream in order.
 void StreamReassembler::push_substring(const string &data, const size_t index, const bool eof) {
-    if (eof) {
-        _eof_idx = data.size() + index;
+    size_t first_readable = _next_assembled_index - _output.buffer_size();
+    size_t first_unacceptable = first_readable + _capacity;
+
+    bool can_accept_all = index + data.size() <= first_unacceptable; 
+
+    if(!_eof && can_accept_all && eof) {
+        _eof = true; 
+        _eof_index = index + data.size();
     }
-    // not expect segement, cache it
-    if (index > _assemble_idx) {
-        _merge_segment(index, data);
-        return;
-    } 
 
-    // expect segment, write it to ByteStream
-    int start_pos = _assemble_idx - index;
-    int write_cnt = data.size() - start_pos;
-    // not enough space
-    if (write_cnt < 0) {
+    size_t accept_end = index + data.size();
+    if(!can_accept_all) {
+        accept_end = first_unacceptable;
+    }
+
+    if (index > accept_end) {
         return;
     }
-    _assemble_idx += _output.write(data.substr(start_pos, write_cnt));
 
-    // search the next segment
-    std::vector<size_t> pop_list;
-    for (auto segment : _segments) {
-        // already process or empty string
-        if (segment.first + segment.second.size() <= _assemble_idx || segment.second.size() == 0) {
-            pop_list.push_back(segment.first);
-            continue;
-        } 
+    size_t next_unassembled = first_readable + _output.buffer_size();
 
-        // not yet
-        if (_assemble_idx < segment.first) {
-            continue;
+    // 可直接放入_output
+    if(index <= next_unassembled) {
+        if(accept_end > next_unassembled) {
+            _output.write(data.substr(next_unassembled - index, accept_end - index));
+            if(eof && can_accept_all) {
+                _output.end_input();
+            }
+            else {
+                auto it = _data_map.begin();
+                while(it != _data_map.end() && it->first <= accept_end) {
+                    if(accept_end - it->first < it->second.size() && it->first + it->second.size() > accept_end) {
+                        _output.write(it->second.substr(accept_end - it->first, it->second.size() - (accept_end - it->first)));
+                        accept_end = it->first + it->second.size();
+                    }
+                    it = _data_map.erase(it);
+                }
+            }
+
+            _next_assembled_index = accept_end;
+            if(_eof && _next_assembled_index >= _eof_index) {
+                _output.end_input();
+            }
+        }
+        else if(accept_end == next_unassembled) {
+            if(eof && can_accept_all) {
+                _output.end_input();
+            }
+        }
+    }
+    else if(index > next_unassembled) { // 无法直接放入，判断是否可以和已有项合并
+        size_t start = index;
+        auto it = _data_map.lower_bound(index);
+        bool can_merge_with_prev = false;
+        auto it_prev = it;
+        if(it != _data_map.begin())
+        {
+            it = prev(it);
+            it_prev = it;
+            if(index <= it->first + it->second.size() && accept_end > it->first + it->second.size()) { // 可与前一项合并
+                can_merge_with_prev = true;
+                it->second += data.substr(it->first + it->second.size() - index, accept_end - (it->first + it->second.size() - index));
+                start = it->first;
+            } else if (index <= it->first + it->second.size() && accept_end <= it->first + it->second.size()) {
+                return ;
+            }
+
+            it = next(it);
         }
 
-        start_pos = _assemble_idx - segment.first;
-        write_cnt = segment.second.size() - start_pos;
-        _assemble_idx += _output.write(segment.second.substr(start_pos, write_cnt));
-        pop_list.push_back(segment.first);
-    }
-    // remove the useless segment
-    for (auto segment_id : pop_list) {
-        _segments.erase(segment_id);
-    }
+        std::string new_data = data.substr(0, accept_end - index); 
 
-    if (empty() && _assemble_idx == _eof_idx) {
-        _output.end_input();
+        if(it != _data_map.end() && accept_end >= it->first && start <= it->first) { // 可与后一项合并
+            string add_data = "";
+            while(it != _data_map.end() && it->first <= accept_end) {
+                if(accept_end - it->first < it->second.size() && it->first + it->second.size() > accept_end) {
+                    add_data += it->second.substr(accept_end - it->first, it->second.size() - (accept_end - it->first));
+                    accept_end = it->first + it->second.size();
+                }
+                it = _data_map.erase(it);
+            }
+
+            if(can_merge_with_prev) {
+                it_prev->second += add_data;
+
+            } else {
+                _data_map[index] = new_data + add_data;
+            }
+
+        } else if(!can_merge_with_prev) {
+            _data_map[index] = data.substr(0, accept_end - index);
+        }
+         
+
+
     }
 }
 
 size_t StreamReassembler::unassembled_bytes() const {
-    size_t total_size = 0;
-    for (const auto& segment : _segments) {
-        total_size += segment.second.size();
+    size_t total_cnt = 0;
+    for(auto it : _data_map) {
+        total_cnt += it.second.size();
     }
-    return total_size;
+
+    return total_cnt;
 }
 
-bool StreamReassembler::empty() const { return unassembled_bytes() == 0; }
-
-
-void StreamReassembler::_merge_segment(size_t index, const std::string& data) {
-    size_t data_left = index;
-    size_t data_right = index + data.size();
-    std::string data_copy = data;
-    std::vector<size_t> remove_list;
-    bool should_cache = true;
-    for (auto segment : _segments)
-    {
-        size_t seg_left = segment.first;
-        size_t seg_right = segment.first + segment.second.size();
-        //|new_index     |segment.first            |segment.second.size()        |merge_segment.size
-        if (data_left <= seg_left && data_right >= seg_left) {
-            if (data_right >= seg_right) {
-                remove_list.push_back(segment.first);
-                continue;
-            }
-            
-            if (data_right < seg_right) {
-                data_copy = data_copy.substr(0, seg_left - data_left) + segment.second;
-                data_right = data_left + data_copy.size();
-                remove_list.push_back(segment.first);
-            }
-        } 
-
-        if (data_left > seg_left && data_left <= seg_right) {
-            if (data_right <= seg_right) {
-                should_cache = false;
-            }
-
-            if (data_right > seg_right) {
-                data_copy = segment.second.substr(0, data_left - seg_left) + data_copy;
-                data_left = seg_left;
-                data_right = data_left + data_copy.size();
-                remove_list.push_back(segment.first);
-            }
-        }
-    }
-    
-    // remove overlap data
-    for (auto remove_idx : remove_list) {
-        _segments.erase(remove_idx);
-    }
-    if (should_cache)
-        _segments[data_left] = data_copy;
-}
+bool StreamReassembler::empty() const { return _data_map.empty(); }
