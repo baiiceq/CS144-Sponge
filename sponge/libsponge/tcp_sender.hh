@@ -20,14 +20,21 @@ class TCPSender {
     //! our initial sequence number, the number for our SYN.
     WrappingInt32 _isn;
 
+    // 待发送段队列
     //! outbound queue of segments that the TCPSender wants sent
     std::queue<TCPSegment> _segments_out{};
 
+    // 已发送但未确认的数据
     //! cache outbound queue of segments that the TCPSender wants sent
     std::queue<TCPSegment> _segments_cache{};
 
+
+    // 即RTO值，经过该段时间未确认则重传
     //! retransmission timer for the connection
     unsigned int _initial_retransmission_timeout;
+
+    // 当前重传一次所需要时间
+    unsigned int _retransmission_timeout{0};
 
     //! outgoing stream of bytes that have not yet been sent
     ByteStream _stream;
@@ -43,11 +50,15 @@ class TCPSender {
     // bytes in flight
     uint64_t _bytes_in_flight{0};
 
+    // 累积的毫秒计时器
     // cal total time
     size_t _time{0};
 
+    // 重传次数
     // retx tims;
     uint8_t _retx_times{0};
+
+    bool _fin_sent{false};
 
   public:
     //! Initialize a TCPSender
