@@ -4,8 +4,6 @@
 
 #include <random>
 #include <iostream>
-#include <vector>
-#include <iterator>
 // Dummy implementation of a TCP sender
 
 // For Lab 3, please replace with a real implementation that passes the
@@ -22,144 +20,145 @@ using namespace std;
 TCPSender::TCPSender(const size_t capacity, const uint16_t retx_timeout, const std::optional<WrappingInt32> fixed_isn)
     : _isn(fixed_isn.value_or(WrappingInt32{random_device()()}))
     , _initial_retransmission_timeout{retx_timeout}
-    , _stream(capacity)
-{
-    _default_initial_retransmission_timeout = retx_timeout;
-}
+    , _stream(capacity) {_retransmission_timeout = _initial_retransmission_timeout; }
 
+// 所有报文段的和，包括SYN和FIN`
 uint64_t TCPSender::bytes_in_flight() const { return _bytes_in_flight; }
 
 void TCPSender::fill_window() {
-    // CLOSED
-    if (next_seqno_absolute() == 0) {
-        // need to send the syn
-        TCPSegment seg;
-        seg.header().syn = true;
-        seg.header().seqno = _isn;
-        _segments_out.push(seg);
-        _next_seqno += seg.length_in_sequence_space();
-        _bytes_in_flight += seg.length_in_sequence_space();
-        // cache the segments
-        _cache_segment(next_seqno_absolute() , seg);
+    // 还没有发送 SYN
+    if (_next_seqno == 0) {
+        TCPSegment syn_seg;
+        syn_seg.header().syn = true;
+        syn_seg.header().seqno = _isn;
+
+        _segments_out.push(syn_seg);
+        _cache_segment(syn_seg);
+
+        _next_seqno += syn_seg.length_in_sequence_space();
+        _bytes_in_flight += syn_seg.length_in_sequence_space();
+        return;  // SYN 发送后，本次填充先停
     }
 
-    // SYN_ACKED
-    if (not stream_in().eof() && next_seqno_absolute() > bytes_in_flight()) {
-        // if windows size equal zero , the fill window method should act like the window size is one
-        size_t max_seg_size = TCPConfig::MAX_PAYLOAD_SIZE;
-        size_t remaining_wsz = _peer_windows_size ? _peer_windows_size : 1;
-        size_t flight_size = bytes_in_flight();
-        if (remaining_wsz < flight_size) {
-            return;
-        }
-        remaining_wsz -= flight_size;
-        string read_stream = _stream.read(min(remaining_wsz, max_seg_size));
-        
-        while (!read_stream.empty()) {
+    // 计算当前窗口大小
+    size_t win = _windows_size == 0 ? 1 : _windows_size;  // 窗口为0时允许发送1字节
+    // 减去已经发生但未确认的长度
+    size_t window_left = win > _bytes_in_flight ? win - _bytes_in_flight : 0;
+
+    // 循环填充窗口
+    while (window_left > 0) {
+        // 流数据还有
+        if (!stream_in().eof()) {
+            size_t to_read = std::min({window_left, stream_in().buffer_size(), TCPConfig::MAX_PAYLOAD_SIZE});
+            if (to_read == 0) break;
+
+            std::string data = _stream.read(to_read);
+            if (data.empty()) break;
+
             TCPSegment seg;
             seg.header().seqno = next_seqno();
-            seg.payload() = Buffer(std::move(read_stream));
-            remaining_wsz -= seg.length_in_sequence_space();
-            if (stream_in().eof() && next_seqno_absolute() < stream_in().bytes_written() + 2 && remaining_wsz >= 1) {
+            seg.payload() = Buffer(std::move(data));
+
+            if (stream_in().eof() && !_fin_sent && window_left >= seg.length_in_sequence_space() + 1) {
                 seg.header().fin = true;
-                remaining_wsz -= 1;
+                _fin_sent = true;
             }
 
-            _next_seqno += seg.length_in_sequence_space();
-            _bytes_in_flight += seg.length_in_sequence_space();
             _segments_out.push(seg);
+            _cache_segment(seg);
 
-            // cache the seg
-            _cache_segment(next_seqno_absolute(), seg);
-            read_stream = _stream.read(min(remaining_wsz, max_seg_size));
+            size_t seg_len = seg.length_in_sequence_space();
+            _next_seqno += seg_len;
+            _bytes_in_flight += seg_len;
+            window_left -= seg_len;
         }
-    }
+        // 流结束且 FIN 尚未发送
+        else if (!_fin_sent) {
+            TCPSegment fin_seg;
+            fin_seg.header().seqno = next_seqno();
+            fin_seg.header().fin = true;
 
-    // SYN_ACKED
-    if (stream_in().eof() && next_seqno_absolute() < stream_in().bytes_written() + 2) {
-        // stream has reached EOF, but FIN flag hasn't been sent yet. so send the fin
-        size_t remaining_wsz = _peer_windows_size ? _peer_windows_size : 1;
-        size_t flight_size = bytes_in_flight();
-        if (remaining_wsz <= flight_size) {
-            return;
+            _segments_out.push(fin_seg);
+            _cache_segment(fin_seg);
+
+            size_t seg_len = fin_seg.length_in_sequence_space();
+            _next_seqno += seg_len;
+            _bytes_in_flight += seg_len;
+
+            _fin_sent = true;
+            window_left -= seg_len;
         }
-
-        TCPSegment seg;
-        seg.header().seqno = next_seqno();
-        seg.header().fin = true;
-        _next_seqno += seg.length_in_sequence_space();
-        _bytes_in_flight += seg.length_in_sequence_space();
-        _windows_size -= seg.length_in_sequence_space();
-        _segments_out.push(seg);
-        // cache the segments
-        _cache_segment(next_seqno_absolute(), seg);
+        else {
+            // 窗口填满或没有数据可以发送
+            break;
+        }
     }
 }
 
+// 收到确认
 //! \param ackno The remote receiver's ackno (acknowledgment number)
 //! \param window_size The remote receiver's advertised window size
 void TCPSender::ack_received(const WrappingInt32 ackno, const uint16_t window_size) {
-    int left_need_ack_bytes = next_seqno() - ackno;
-    if (left_need_ack_bytes < 0) {
+    uint64_t abs_ackno = unwrap(ackno, _isn, _next_seqno);
+    // 如果 ACK 小于已经发送的最老序号，则忽略
+    if (abs_ackno > _next_seqno) {
         return;
     }
 
-    // pop the cache segments;
-    vector<uint64_t> remove_acknos;
-    for (auto & seg : _segments_cache) {
-        uint64_t abs_ackno = unwrap(ackno, _isn, seg.first);
-        if (seg.first <= abs_ackno) {
-            remove_acknos.push_back(seg.first);
+    _windows_size = window_size; 
+    bool recevie_valid = false;
+
+    while (!_segments_cache.empty()) {
+        auto &seg = _segments_cache.front();
+        uint64_t seg_start = unwrap(seg.header().seqno, _isn, _next_seqno);
+        uint64_t seg_end = seg_start + seg.length_in_sequence_space();
+
+        // 如果该段的末尾序号 <= abs_ackno，则已被确认
+        if (seg_end <= abs_ackno) {
+            recevie_valid = true;
+            _bytes_in_flight -= seg.length_in_sequence_space();
+            _segments_cache.pop();
+        } else {
+            break; 
         }
     }
 
-    for (auto & remove_ackno : remove_acknos) {
-        _segments_cache.erase(remove_ackno);
+    fill_window();
+    if(recevie_valid) {
+        _time = 0;               
+        _retx_times = 0;   
+        _retransmission_timeout = _initial_retransmission_timeout; 
     }
-
-    if (window_size > _peer_windows_size) {
-        // extend windows size
-        _windows_size += window_size - _peer_windows_size;
-    }
-    _peer_windows_size = window_size;
-
-    // valid ackno
-    if (!remove_acknos.empty()) {
-        //cerr << "ack received window_size=" << window_size << endl;
-        _windows_size = max(window_size, uint16_t(1));
-        _bytes_in_flight = left_need_ack_bytes;
-        _time = 0;
-        _retx_times = 0;
-        _initial_retransmission_timeout = _default_initial_retransmission_timeout;
-        fill_window();
-    }
+    
 }
 
 //! \param[in] ms_since_last_tick the number of milliseconds since the last call to this method
 void TCPSender::tick(const size_t ms_since_last_tick) {
+    // 所有段均已确认
     if (_segments_cache.empty()) {
         return;
     }
 
     _time += ms_since_last_tick;
-     if (_time >= _initial_retransmission_timeout && _retx_times <= TCPConfig::MAX_RETX_ATTEMPTS) {
-        _segments_out.push(_segments_cache.begin()->second);
-        _time = 0;
-        if (_peer_windows_size != 0) {
-            _initial_retransmission_timeout *= 2;
+    if (_time >= _retransmission_timeout && _retx_times <= TCPConfig::MAX_RETX_ATTEMPTS) {
+        _segments_out.push(_segments_cache.front());
+        // TCP 的指数退避算法
+        if (_windows_size > 0) {  // window 为0时不触发
+            _retransmission_timeout *= 2;
             _retx_times += 1;
         }
-     }
+        _time = 0;
+    }
 }
 
 unsigned int TCPSender::consecutive_retransmissions() const { return _retx_times; }
 
 void TCPSender::send_empty_segment() {
     TCPSegment seg;
-    seg.header().seqno = next_seqno();
+    seg.header().seqno=wrap(_next_seqno, _isn);
     _segments_out.push(seg);
 }
 
-void TCPSender::_cache_segment(uint64_t ackno, TCPSegment& seg) {
-    _segments_cache[ackno] = seg;
+void TCPSender::_cache_segment(TCPSegment& seg) {
+    _segments_cache.push(seg);
 }

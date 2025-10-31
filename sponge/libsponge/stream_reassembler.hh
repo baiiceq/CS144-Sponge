@@ -12,18 +12,24 @@
 class StreamReassembler {
   private:
     // Your code here -- add private members as necessary.
-    size_t _assemble_idx;    // already assemble index
+
     ByteStream _output;  //!< The reassembled in-order byte stream
     size_t _capacity;    //!< The maximum number of bytes
-    size_t _eof_idx;
-    std::map<size_t, std::string> _segments; // unassembled segements 
+
+    bool _eof{};
+    std::map<uint64_t, std::string> _data_map;
+    uint64_t _next_assembled_index{0};
+    uint64_t _total_unassembled_cnt{0};
+    uint64_t _eof_index{0};
+    size_t _total_data_size{0};
+
 
   public:
     //! \brief Construct a `StreamReassembler` that will store up to `capacity` bytes.
     //! \note This capacity limits both the bytes that have been reassembled,
     //! and those that have not yet been reassembled.
     StreamReassembler(const size_t capacity);
-
+ 
     //! \brief Receive a substring and write any newly contiguous bytes into the stream.
     //!
     //! The StreamReassembler will stay within the memory limits of the `capacity`.
@@ -49,9 +55,6 @@ class StreamReassembler {
     //! \brief Is the internal state empty (other than the output stream)?
     //! \returns `true` if no substrings are waiting to be assembled
     bool empty() const;
-
-private:
-    void _merge_segment(size_t index, const std::string& data);
 };
 
 #endif  // SPONGE_LIBSPONGE_STREAM_REASSEMBLER_HH

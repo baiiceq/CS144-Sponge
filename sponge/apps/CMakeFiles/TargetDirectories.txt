@@ -1,0 +1,10 @@
+/home/wzy/Desktop/code/CS144/CS144-Sponge/sponge/apps/CMakeFiles/stream_copy.dir
+/home/wzy/Desktop/code/CS144/CS144-Sponge/sponge/apps/CMakeFiles/udp_tcpdump.dir
+/home/wzy/Desktop/code/CS144/CS144-Sponge/sponge/apps/CMakeFiles/tcp_native.dir
+/home/wzy/Desktop/code/CS144/CS144-Sponge/sponge/apps/CMakeFiles/tun.dir
+/home/wzy/Desktop/code/CS144/CS144-Sponge/sponge/apps/CMakeFiles/tcp_udp.dir
+/home/wzy/Desktop/code/CS144/CS144-Sponge/sponge/apps/CMakeFiles/tcp_ipv4.dir
+/home/wzy/Desktop/code/CS144/CS144-Sponge/sponge/apps/CMakeFiles/webget.dir
+/home/wzy/Desktop/code/CS144/CS144-Sponge/sponge/apps/CMakeFiles/tcp_benchmark.dir
+/home/wzy/Desktop/code/CS144/CS144-Sponge/sponge/apps/CMakeFiles/edit_cache.dir
+/home/wzy/Desktop/code/CS144/CS144-Sponge/sponge/apps/CMakeFiles/rebuild_cache.dir

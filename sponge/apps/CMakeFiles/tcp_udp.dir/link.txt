@@ -1,0 +1,1 @@
+/usr/bin/c++ -rdynamic CMakeFiles/tcp_udp.dir/tcp_udp.o -o tcp_udp   -L/home/wzy/Desktop/code/CS144/CS144-Sponge/sponge/apps  libstream_copy.a -lsponge 

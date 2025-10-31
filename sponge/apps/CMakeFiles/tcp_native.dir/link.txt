@@ -1,0 +1,1 @@
+/usr/bin/c++ -rdynamic CMakeFiles/tcp_native.dir/tcp_native.o -o tcp_native   -L/home/wzy/Desktop/code/CS144/CS144-Sponge/sponge/apps  libstream_copy.a -lsponge 

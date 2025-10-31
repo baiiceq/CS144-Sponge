@@ -19,27 +19,26 @@ class TCPConnection {
     // active 
     bool _active{true};
 
+    // time since last segment received
+    size_t _time{0};
+
+
+    // 四次挥手简化
     //! Should the TCPConnection stay active (and keep ACKing)
     //! for 10 * _cfg.rt_timeout milliseconds after both streams have ended,
     //! in case the remote TCPConnection doesn't know we've received its whole stream?
     bool _linger_after_streams_finish{true};
 
-    // time since last segment received
-    size_t _time{0};
 
   public:
     //! \name "Input" interface for the writer
     //!@{
 
+    // 发生syn请求连接
     //! \brief Initiate a connection by sending a SYN segment
     void connect();
 
-    void unclean_shutdown();
-    void clean_shutdown();
-    void flush_send();
-    void _send_rst_segment();
-    void _setup_segment(TCPSegment& seg);
-
+    // 写入数据，传输
     //! \brief Write data to the outbound byte stream, and send it over TCP if possible
     //! \returns the number of bytes from `data` that were actually written.
     size_t write(const std::string &data);
@@ -60,6 +59,21 @@ class TCPConnection {
 
     //! \name Accessors used for testing
 
+    // 发生错误,关闭连接
+    void unclean_shutdown();
+
+    // 正常关闭连接
+    void clean_shutdown();
+
+    // 将sender要发生的数据传到高层connection中
+    void flush_send();
+
+    // 发送RST,主动中断
+    void _send_rst_segment();
+
+    // 补充 ACK 和窗口信息
+    void _setup_segment(TCPSegment& seg);
+
     //!@{
     //! \brief number of bytes sent and not yet acknowledged, counting SYN/FIN each as one byte
     size_t bytes_in_flight() const;
@@ -67,13 +81,14 @@ class TCPConnection {
     size_t unassembled_bytes() const;
     //! \brief Number of milliseconds since the last segment was received
     size_t time_since_last_segment_received() const;
-    //!< \brief summarize the state of the sender, receiver, and the connection
+    //!< \brief summarize the time since last segment receivedstate of the sender, receiver, and the connection
     TCPState state() const { return {_sender, _receiver, active(), _linger_after_streams_finish}; };
     //!@}
 
     //! \name Methods for the owner or operating system to call
     //!@{
 
+    // 接受tcp段
     //! Called when a new segment has been received from the network
     void segment_received(const TCPSegment &seg);
 
@@ -85,7 +100,7 @@ class TCPConnection {
     //! put each one into the payload of a lower-layer datagram (usually Internet datagrams (IP),
     //! but could also be user datagrams (UDP) or any other kind).
     std::queue<TCPSegment> &segments_out() { return _segments_out; }
-
+  
     //! \brief Is the connection still alive in any way?
     //! \returns `true` if either stream is still running or if the TCPConnection is lingering
     //! after both streams have finished (e.g. to ACK retransmissions from the peer)
